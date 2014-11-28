@@ -10,6 +10,7 @@
  #include <stdlib.h>
  #include <avr/interrupt.h>
  #include <avr/pgmspace.h>
+ #include <math.h>
  #ifndef F_CPU
 	 #define F_CPU 16000000UL
  #endif
@@ -110,10 +111,18 @@
 #define BOARD_HIGH_AUTO_DEFAULT TRUE
 
  /********************************************************************/
+
+ #define ENCODER_DDR	DDRD
+ #define ENCODER_PORT	PORTD
+ #define ENCODER_PIN	PIND
+ #define ENCODER_CLK	PIND0		// arduino digitalpin 21
+ #define ENCODER_DT		PIND1		// arduino digitalpin 20
+ #define CLK			PD0
+ #define DT				PD1
  
 //////////////////////////////////////////////////////////////////////////
 static FILE debug =  FDEV_SETUP_STREAM (debug_stream, NULL, _FDEV_SETUP_WRITE);
-static FILE uart1 =  FDEV_SETUP_STREAM (uart_stream, NULL, _FDEV_SETUP_WRITE);
+//static FILE uart1 =  FDEV_SETUP_STREAM (uart_stream, NULL, _FDEV_SETUP_WRITE);
 
 enum MotorState{
 	MNONE = 0,
@@ -136,6 +145,7 @@ volatile uint8_t limit_switch_high_flag = FALSE;
 volatile uint8_t limit_switch_low_flag = FALSE;
 volatile uint8_t board_hit_flag = FALSE;
 volatile uint8_t raspberry_pi_ready = FALSE;
+volatile uint8_t topu = 0;
 
 enum BoardPosition{
 	BNONE,
@@ -156,38 +166,12 @@ volatile uint16_t timr1_count = 0;
 // led
 volatile uint8_t led_state = 0;
 
-//
-volatile struct circular_queue gsm_queue;
+volatile uint8_t direction = 0;
+volatile uint8_t position_count_reset_flag = 0;
+volatile uint8_t turn_done = 0;
+volatile uint8_t position_count = 0;
+volatile uint8_t position_count_temp = 0;
 
-//
-volatile struct rx_buffer gsm_buffer;
-
-struct sms_detail
-{
-	char sender[15];
-	char payload[SMS_PAYLOAD_LEN];
-};
-//
-volatile struct sms_detail sms;
-volatile int sms_location = -1;
-
-enum gsm_response
-{
-	OK,
-	ERROR,
-	READY,
-	CFUN,
-	CMGR,
-	CMTI,
-	CMGS,
-	RING,
-	NO_CARRIER,
-	NOTHING,
-	ZERO
-};
-volatile enum gsm_response gsm_res;
-volatile uint8_t newSMSAlartFlag = FALSE;
-char delimiters[] = "\"";
 //////////////////////////////////////////////////////////////////////////
 
 void delay_ms(uint16_t ms);
@@ -198,15 +182,10 @@ void setMotorForward(void);
 void setMotorReverse(void);
 void initRelaySchield(void);
 void initVibrationSensor(void);
-void initLimitSwitch(void);
 uint8_t boardHighLimitState(void);
 uint8_t boardLowLimitState(void);
-void setINT(uint8_t state);
 void init_tmr0(void);
 void init_timer1(void);
-enum gsm_response gsm_parser(char *buffer, unsigned int len);
-void init_sms(void);
-void setSender(char *number);
 void InitDevice(void);
 uint8_t vibratinSensorState(void);
 void hardMotorStop(void);
@@ -219,107 +198,71 @@ void sendAck(void);
 //////////////////////////////////////////////////////////////////////////
 ISR(USART0_RX_vect){ // interrupt service routine for UART0 -> Debug
 	unsigned char rx_char = UDR0;
-	
 	if(rx_char == 'D'){
 		LED_ON;
 		sendAck();
 		setMotorReverse();
 		motorState = REVERSE;
 		timr1_count = 0;
+		position_count = 0;
 	}
 	
 	if(rx_char == 'R'){
 		raspberry_pi_ready = TRUE;
 	}
-	
-	//if(rx_char == 'f'){
-		//motorState = FORWARD;
-		//setMotorForward();
-	//}else if(rx_char == 'r'){
-		//motorState = REVERSE;
-		//setMotorReverse();
-	//}else if(rx_char == 's'){
-		//motorState = STOP;
-		//setMotorStop();
-	//}else if(rx_char == 'a'){
-		//debug_putc(rx_char);
-		//if(boardHighAuto == TRUE){
-			//boardHighAuto = FALSE;
-		//}else{
-			//boardHighAuto = TRUE;
-		//}
-		////printf("boardHighAuto: %d\n",boardHighAuto);
-	//}else if (rx_char == ',')
-	//{
-		//hardMotorForward();
-	//}else if (rx_char == 'm')
-	//{
-		//hardMotorStop();
-	//}else if (rx_char == 'n')
-	//{
-		//hardMotorReverse();
-	//}
-	
-	//if(rx_char != 0x00 && rx_char != 0xFF){
-		//if((queue_push((struct circular_queue *)&gsm_queue, rx_char) != QUEUE_PUSH_SUCCESS))
-		//{
-			//printf("Error: GSM queue full\n");
-		//}
-	//}
 }
 
 ISR(USART1_RX_vect){ // interrupt service routine for UART1 -> GSM Module
 	unsigned char rx_char = UDR1;
 	if(rx_char != 0x00 && rx_char != 0xFF){
-		if((queue_push((struct circular_queue *)&gsm_queue, rx_char) != QUEUE_PUSH_SUCCESS))
-		{
-			//printf("Error: GSM queue full\n");
-		}
+		
 	}
 }
 
 //Interrupt Service Routine for INT0
 ISR(INT0_vect){
-	if(limit_switch_high_flag == FALSE){
-		limit_switch_high_flag = TRUE;
-		limit_switch_low_flag = FALSE;
-		motorState = STOP;
-		setMotorStop();
-		boardPosition = HIGH;
-		//printf("Board High\n");
+	
+	if(ENCODER_PIN & _BV(ENCODER_DT))
+	{
+		direction = 0;
 	}
-}
-
-//Interrupt Service Routine for INT1
-ISR(INT1_vect){
-	if (limit_switch_low_flag == FALSE){
-		limit_switch_low_flag = TRUE;
-		limit_switch_high_flag = FALSE;
-		board_low_position_count = 0;
-		board_low_position_sec_count = 0;
-		motorState = STOP;
-		setMotorStop();
-		boardPosition = LOW;
-		//printf("Board Low\n");
+	else
+	{
+		direction = 1;
 	}
+	turn_done = 1;
 }
 
 ISR(TIMER0_OVF_vect){
 	// motor will move only for its move time limit
+	if (turn_done == 1)
+	{
+		turn_done = 0;
+		position_count++;
+		LED_TOGGLE;
+	}
 	if (motor_moving_forward == TRUE){
-		motor_move_count++;
-		if(motor_move_count == 610){
-			motor_move_count = 0;
-			motor_forward_moving_state_count = 0;
-			motor_forward_move_count = 0;
+		if(	position_count == position_count_temp)
+		{
+			position_count = 0;
+			position_count_temp = 0;
 			boardPosition = HIGH;
 			motorState = STOP;
 			setMotorStop();
-			//delay_ms(1000);// hold few second for stability
-			//send done
-			sendDone();
-			printf("Motor forward Move time limit reached!\n");
 		}
+		//motor_move_count++;
+		//if(motor_move_count == 610){
+			//motor_move_count = 0;
+			//motor_forward_moving_state_count = 0;
+			//motor_forward_move_count = 0;
+			//boardPosition = HIGH;
+			//motorState = STOP;
+			//setMotorStop();
+			////delay_ms(1000);// hold few second for stability
+			////send done
+			//sendDone();
+			//printf("Motor forward Move time limit reached!\n");
+		//}
 		motor_forward_move_count++;
 		if(motor_forward_move_count == 12){
 			motor_forward_move_count = 0;
@@ -342,40 +285,26 @@ ISR(TIMER0_OVF_vect){
 				printf("Motor forward Move phase\n");
 			}
 		}
-		//if(motor_move_count == 74 && motor_forward_moving_state_count == 0){// 400ms stop
-			//motor_forward_moving_state_count = 1;
-			//RELAY_PORT_D0D1 &= ~_BV(RELAY_D0) & ~_BV(RELAY_D1);
-			//RELAY_PORT_D2 |= _BV(RELAY_D2);
-			//RELAY_PORT_D3 |= _BV(RELAY_D3);
-			//printf("Motor forward Move Temp pause\n");
-		//}else if (motor_move_count == 148 && motor_forward_moving_state_count == 1){
-			//motor_forward_moving_state_count = 2;
-			//RELAY_PORT_D0D1 |= _BV(RELAY_D0);
-			//RELAY_PORT_D0D1 &= ~_BV(RELAY_D1);
-			//RELAY_PORT_D2 &= ~_BV(RELAY_D2);
-			//RELAY_PORT_D3 |= _BV(RELAY_D3);
-			//printf("Motor forward Move phase 2\n");
-		//}else if (motor_move_count == 222 && motor_forward_moving_state_count == 2){
-			//motor_move_count = 0;
-			//motor_forward_moving_state_count = 0;
-			//boardPosition = HIGH;
-			//motorState = STOP;
-			//setMotorStop();
-			//printf("Motor forward Move time limit reached!\n");
-		//}
 	}
 	
 	if(motor_moving_reverse == TRUE){
-		motor_move_count++;
-		if(motor_move_count == 184){//(244/4)=61 , (244/3)=81
-			motor_move_count = 0;
-			motor_reverse_moving_state_count = 0;
-			motor_reverse_move_count = 0;
+		if(position_count == 3){
+			position_count_temp = position_count;
+			position_count = 0;
 			boardPosition = LOW;
 			motorState = STOP;
 			setMotorStop();
-			printf("Motor reverse Move time limit reached!\n");
 		}
+		//motor_move_count++;
+		//if(motor_move_count == 184){//(244/4)=61 , (244/3)=81
+			//motor_move_count = 0;
+			//motor_reverse_moving_state_count = 0;
+			//motor_reverse_move_count = 0;
+			//boardPosition = LOW;
+			//motorState = STOP;
+			//setMotorStop();
+			//printf("Motor reverse Move time limit reached!\n");
+		//}
 		motor_reverse_move_count++;
 		if(motor_reverse_move_count == 12){
 			motor_reverse_move_count = 0;
@@ -426,88 +355,6 @@ ISR(TIMER0_OVF_vect){
 		//}else{
 			//led_state = 0;
 			//LED_OFF;
-		//}
-	//}
-	
-	// Handle GSM response
-	//if(queue_pop((struct circular_queue *)&gsm_queue,(unsigned char *)&gsm_buffer.rx_char) == QUEUE_POP_SUCCESS){
-		////debug_putc(gsm_buffer.rx_char);
-		//switch (gsm_buffer.rx_flag){
-			//case 0:
-				//if (gsm_buffer.rx_char == '\n'){
-					//gsm_buffer.rx_flag = 1;
-					//gsm_buffer.rx_count = 0;
-				//}
-			//break;
-			//
-			//case 1:
-				//if (gsm_buffer.rx_char == '\r'){
-					//gsm_buffer.rx_flag = 0;
-					//gsm_buffer.rx_buff[gsm_buffer.rx_count] = '\0';
-					//if(gsm_buffer.rx_count > 0){
-						//// TODO:  Parse GSM AT command(s) and do the response of the result(s)
-						///*
-						 //*	Reading SMS
-						 //*	-----------
-						 //*	<CR><LF>
-						 //*	+CMGR: "REC UNREAD","+8801617481114","","13/06/25,16:03:05+24"<CR><LF>
-						 //*	This is a test message!<CR><LF><CR>
-						 //*	<CR><LF>
-						 //*	OK<CR><LF>
-						 //*
-						 //*	New sms arrived
-						 //*	---------------
-						 //*	<LF>
-						 //*	+CMTI: "SM",3<CR><LF>
-						 //*/
-						//if(newSMSAlartFlag == TRUE){
-							//newSMSAlartFlag = FALSE;
-							//strcpy((char *)sms.payload,(const char *)gsm_buffer.rx_buff);
-							////printf("SMS message: %s\n",sms.payload);
-							//if(sms.payload[0]=='-'){
-								//if (sms.payload[1]=='a' || sms.payload[1]=='A')
-								//{
-									//boardHighAuto = TRUE;
-								//} 
-								//else if (sms.payload[1]=='u' || sms.payload[1]=='U')
-								//{
-									//boardHighAuto = FALSE;
-									//motorState = FORWARD;
-									////setMotorForward();
-								//}
-								//else if (sms.payload[1]=='d' || sms.payload[1]=='D')
-								//{
-									//boardHighAuto = FALSE;
-									//motorState = REVERSE;
-									////setMotorReverse();
-								//}
-							//}
-							//fprintf(&uart1,"AT+CMGDA=\"DEL ALL\"%c",0x0D);
-						//}else{
-							//gsm_res = NOTHING;
-							//init_sms();
-							////printf("Buffer: %s\n",(char *)gsm_buffer.rx_buff);
-							//gsm_res = gsm_parser((char *)gsm_buffer.rx_buff,strlen((const char *)gsm_buffer.rx_buff));
-							//if(gsm_res == CMGR){
-								//newSMSAlartFlag = TRUE;
-								////printf("New SMS Received from %s\n",sms.sender);
-							//}else if (gsm_res == CMTI){
-								////printf("sms Location: %d\n",sms_location);
-								//fprintf(&uart1,"AT+CMGR=%d%c",sms_location,0x0D);
-							//}
-							////printf("GSM Response: [%d]\n",(int)gsm_res);
-						//}
-						//gsm_buffer.rx_count = 0;
-					//}
-				//}else{
-					//gsm_buffer.rx_buff[gsm_buffer.rx_count] = gsm_buffer.rx_char;
-					//gsm_buffer.rx_count++;
-					//if(gsm_buffer.rx_count > RX_BUFF_LEN){
-						//gsm_buffer.rx_flag = 0;
-						////printf("Error: GSM buffer length too long\n");
-					//}
-				//}
-			//break;
 		//}
 	//}
 }
@@ -565,17 +412,6 @@ void setINT(uint8_t state){
 	}
 }
 
-void initLimitSwitch(void){
-	// Enable INT0. INT1	 External Interrupt
-	//EIMSK |= _BV(INT0) | _BV(INT1);
-	// Low-level of INT0,INT0 generates an interrupt request - This will depend on if you
-	// are using a pullup resistor or a pulldown resistor on your
-	// button and port
-	//EICRA |= _BV(ISC00) | _BV(ISC10);
-	LIMIT_SWITCH_DDR &= ~_BV(LIMIT_SWITCH_HIGH) & ~_BV(LIMIT_SWITCH_LOW); // Set as input (Using for interupt INT0, INT1)
-	LIMIT_SWITCH_PORT |= _BV(LIMIT_SWITCH_HIGH) | _BV(LIMIT_SWITCH_LOW);// Enable pull-up resistor
-}
-
 void setMotorStop(void){
 	motor_moving_forward = FALSE;
 	motor_moving_reverse = FALSE;
@@ -593,6 +429,7 @@ void setMotorStop(void){
 	//RELAY_PORT_D2 &= ~_BV(RELAY_D2);
 	//RELAY_PORT_D3 &= ~_BV(RELAY_D3);
 	motorState = MNONE;
+	topu = 1;
 }
 
 void setMotorForward(void){
@@ -673,56 +510,6 @@ void init_timer1(void)
 	//printf("Timer 1 Initialized\n");
 }
 
-enum gsm_response gsm_parser(char *buffer, unsigned int len)
-{
-	enum gsm_response response = NOTHING;
-	char *pch = NULL;
-	//int count = 0;
-	if(strcmp("OK",(const char *)buffer) == 0)
-	{
-		response = OK;
-	}
-	else if (strcmp("ERROR",(const char *)buffer) == 0)
-	{
-		response = ERROR;
-	}
-	else if (strncmp("+CMGR",(const char *)buffer,5) == 0)
-	{
-		pch = strtok ((char *)&buffer[6],delimiters);
-		while(pch != NULL)
-		{
-			pch = strtok (NULL,delimiters);
-			if(pch[0] == '+')
-			{
-				setSender(pch);
-			}
-		}
-		response = CMGR;
-	}
-	else if (strncmp("+CMTI",(const char *)buffer,5) == 0)
-	{
-		pch = strtok ((char *)&buffer[6],",");
-		pch = strtok (NULL,",");
-		sms_location = atoi(pch);
-		response = CMTI;
-	}
-	else if (strcmp("+CMGS",(const char *)buffer) == 0)
-	{
-		response = CMGS;
-	}
-	return response;
-}
-
-void init_sms(void)
-{
-	memset((struct sms_detail *)&sms,0,sizeof(struct sms_detail));
-}
-
-void setSender(char *number){
-	memcpy((struct sms_detail *)sms.sender,number,14);
-	sms.sender[14] = '\0';
-}
-
 void sendDone(void){
 	printf("done\n");
 	LED_OFF;
@@ -745,27 +532,25 @@ void InitDevice(void){
 	boardPosition = BNONE;
 	motor_moving_forward = FALSE;	
 	motor_moving_reverse = FALSE;
-	newSMSAlartFlag = FALSE;
 	board_low_position_count = 0;
 	board_low_position_sec_count = 0;
-	sms_location = -1;
 	boardHighAuto = BOARD_HIGH_AUTO_DEFAULT;
 	motor_forward_moving_state_count = 0;
 	motor_reverse_moving_state_count = 0;
 	motor_forward_move_count = 0;
 	motor_reverse_move_count = 0;
 	motor_duty_cycle_state = 0;
-	init_queue((struct circular_queue *)&gsm_queue);
-	init_rx_buffer((struct rx_buffer *)&gsm_buffer);
-	init_sms();
 	delay_ms(10);
-	stdout = &debug;
+	ENCODER_DDR &= ~_BV(CLK);
+	ENCODER_DDR &= ~_BV(DT);
 	debug_init(debug_BaudValue,1);
 	//uart_init(uart_BaudValue,1);
+	stdout = &debug;
 	initLED();
+	EIMSK |= _BV(INT0);
+	EICRA |= _BV(ISC01);
 	init_tmr0();
 	init_timer1();
-	initLimitSwitch();
 	initVibrationSensor();
 	initRelaySchield();
 	sei();
@@ -797,6 +582,11 @@ uint8_t boardLowLimitState(void){
 
 int main(void)
 {
+	position_count = 0;
+	direction = 0;
+	position_count = 0;
+	topu = 0;
+	turn_done = 0;
 	InitDevice();
 	delay_ms(1000);
 	// initially checks if board is at high 
@@ -812,15 +602,15 @@ int main(void)
 	//}
 	
 	// checks if the board is at high when device is starting
-	if(boardHighLimitState() == FALSE){
-		printf("Moving motor Forward to set the board high\n");
-		setMotorForward(); 
-	}else{
-		boardPosition = HIGH;
-		motor_moving_forward = FALSE;
-		motor_moving_reverse = FALSE;
-		printf("Board is initially at high\n");
-	}
+	//if(boardHighLimitState() == FALSE){
+		//printf("Moving motor Forward to set the board high\n");
+		//setMotorForward(); 
+	//}else{
+		//boardPosition = HIGH;
+		//motor_moving_forward = FALSE;
+		//motor_moving_reverse = FALSE;
+		//printf("Board is initially at high\n");
+	//}
 	
 	sendDeviceReady();
 	
@@ -834,6 +624,7 @@ int main(void)
 			//printf("L\n");
 		//}
 		//////////////////////////////////////////////////////////////////////////
+		/*
 		if(boardHighLimitState() == TRUE && motor_moving_forward == TRUE){
 			//if(limit_switch_high_flag == FALSE){
 			setMotorStop();
@@ -858,6 +649,7 @@ int main(void)
 			printf("Board Low\n");
 			//}
 		}
+		*/
 		//else if(boardPosition == HIGH && motor_moving_forward == FALSE && motor_moving_reverse == FALSE){
 			////delay_ms(10);
 			////printf("it is here\n");
@@ -884,6 +676,26 @@ int main(void)
 			//printf("Motor Stopped\n");
 			////setMotorStop();			
 		//}
+		
+		
+		//if(turn_done == 1)
+		//{
+			//if(direction==1)
+			//{
+				//position_count++;
+			//}
+			//else
+			//{
+				//position_count--;
+			//}
+			//turn_done = 0;
+			//printf("Count: %d\n",position_count);
+		//}
+		if(topu == 1)
+		{
+			topu = 0;
+			printf("Stopped: %d\n",position_count);
+		}
     }
 }
 
