@@ -23,15 +23,22 @@
  #include "rx_buffer.h"
  
  //LED Pin
- #define LED_DDR	DDRB
- #define LED_PORT	PORTB
- #define LED		PB7
+ #define LED_BOARD_DDR		DDRB
+ #define LED_BOARD_PORT		PORTB
+ #define LED_BOARD			PB7
+ 
+ #define LED_EXT_DDR	DDRA
+ #define LED_EXT_PORT	PORTA
+ #define LED_EXT		PA2
+ #define LED_12V		PA3
 
  // LED Operation
- #define LED_ON		LED_PORT |=  _BV(LED)
- #define LED_OFF	LED_PORT &= ~_BV(LED)
- #define LED_TOGGLE LED_PORT ^= _BV(LED)
-
+ #define LED_ON(PORT,PIN)		PORT |=  _BV(PIN)
+ #define LED_OFF(PORT,PIN)		PORT &= ~_BV(PIN)
+ #define LED_TOGGLE(PORT,PIN)	PORT ^= _BV(PIN)
+ 
+ 
+ #define	BOARD_HIGH_AUTO_DEFAULT TRUE
  /********************************************************************
 
  Configuration Area.
@@ -83,46 +90,52 @@
  REvarse | 0  | 1  | 1  | 0
 
  ********************************************************************/
-#define MOTOR_MOVE_TIME_LIMIT	1 // Secs
+
 /********************************************************************
 
  Configuration Area.
- Limit Switch connection.
+ Encoder connection.
 
  in this example it is connected to as follows
 
- Switch| MCU         - Arduino
- ___________________ _ _______________
- HIGH  | PD0 (INT0)  - Digital PIN 21
- LOW   | PD1 (INT1)  - Digital PIN 20
- 
+ Encoder				| MCU         - Arduino
+ ____________________________________ _ _______________
+ Motor Encoder CLK Pin	| PD0 (INT0)  - Digital PIN 21
+ Motor Encoder DT Pin	| PA0		  - Digital PIN 22
+ Tuning Encoder SW Pin	| PD0 (INT2)  - Digital PIN 19
+ Tuning Encoder CLK Pin	| PA0 (INT1)  - Digital PIN 20
+ Tuning Encoder DT Pin	| PA0		  - Digital PIN 23
+  
  ********************************************************************/
 
-#define LIMIT_SWITCH_DDR	DDRD
-#define LIMIT_SWITCH_PORT	PORTD
-#define LIMIT_SWITCH_PIN	PIND
-#define LIMIT_SWITCH_HIGH	PD0
-#define LIMIT_SWITCH_LOW	PD1
-
-#define BOARD_LOW_POSITION_STAY_LIMIT 5 // Sec
-
-#define SMS_PAYLOAD_LEN 160
-
-#define BOARD_HIGH_AUTO_DEFAULT TRUE
-
- /********************************************************************/
-
- #define ENCODER_DDR	DDRD
- #define ENCODER_PORT	PORTD
- #define ENCODER_PIN	PIND
- #define ENCODER_CLK	PIND0		// arduino digitalpin 21
- #define ENCODER_DT		PIND1		// arduino digitalpin 20
- #define CLK			PD0
- #define DT				PD1
+ #define ENCODER_CLK_SW_DDR		DDRD
+ #define ENCODER_DT_DDR			DDRA
+ 
+ #define ENCODER_CLK_SW_PORT	PORTD
+ #define ENCODER_DT_PORT		PORTA 
+ #define ENCODER_DT_PIN			PINA
+ 
+ #define MOTOR_ENCODER_CLK_PIN	PIND0		// arduino digitalpin 21
+ #define MOTOR_ENCODER_DT_PIN	PINA0		// arduino digitalpin 22
+ #define MOTOR_ENCODER_CLK		PD0
+ #define MOTOR_ENCODER_DT		PA0
+ 
+ #define TUNING_ENCODER_SW_PIN	PIND2		// arduino digitalpin 19
+ #define TUNING_ENCODER_CLK_PIN	PIND1		// arduino digitalpin 20
+ #define TUNING_ENCODER_DT_PIN	PINA1		// arduino digitalpin 23
+ #define TUNING_ENCODER_CLK		PD1
+ #define TUNING_ENCODER_SW		PD2
+ #define TUNING_ENCODER_DT		PA1
+ /************************************************************************/
+ /*                                                                      */
+ /************************************************************************/
+ #define	POSITION_COUNT_LIMIT		3
+ #define	HIGH_PWM					12
+ #define	LOW_PWM						24
+ #define	MOTOR_PWM_CYCLE				24 // 8 * 3 = 24 (200ms period)
  
 //////////////////////////////////////////////////////////////////////////
 static FILE debug =  FDEV_SETUP_STREAM (debug_stream, NULL, _FDEV_SETUP_WRITE);
-//static FILE uart1 =  FDEV_SETUP_STREAM (uart_stream, NULL, _FDEV_SETUP_WRITE);
 
 enum MotorState{
 	MNONE = 0,
@@ -146,6 +159,8 @@ volatile uint8_t limit_switch_low_flag = FALSE;
 volatile uint8_t board_hit_flag = FALSE;
 volatile uint8_t raspberry_pi_ready = FALSE;
 volatile uint8_t topu = 0;
+volatile uint8_t pwm_limit = 0;
+volatile uint8_t hard_motor_delay = 0;
 
 enum BoardPosition{
 	BNONE,
@@ -166,28 +181,46 @@ volatile uint16_t timr1_count = 0;
 // led
 volatile uint8_t led_state = 0;
 
-volatile uint8_t direction = 0;
-volatile uint8_t position_count_reset_flag = 0;
-volatile uint8_t turn_done = 0;
-volatile uint8_t position_count = 0;
-volatile uint8_t position_count_temp = 0;
+// encoder push button
+volatile uint8_t encoder_push_button_flag = 0;
+
+// motor encoder
+volatile uint8_t motor_move_direction = 0;
+volatile uint8_t motor_turn_done = 0;
+volatile int8_t motor_position_count = 0;
+volatile int8_t motor_position_count_temp = 0;
+
+// tuning encoder
+volatile uint8_t tuning_move_direction = 0;
+volatile uint8_t tuning_turn_done = 0;
+volatile uint8_t tuning_position_count = 0;
+volatile uint8_t tuning_position_count_temp = 0;
+
+volatile uint8_t motor_position_count_limit = 0;
+
+// serial
+uint8_t rx_command_flag = 0;
+uint8_t rx_char_count = 0;
+#define RX_BUFF	64
+char rx_buffer[64];
 
 //////////////////////////////////////////////////////////////////////////
 
 void delay_ms(uint16_t ms);
 void delay_us(uint16_t us);
 void initLED(void);
-void setMotorStop(void);
+void setMotorStop(uint8_t soft);
+void motorStopSoft(void);
+void motorStop(void);
 void setMotorForward(void);
+void motorForward(void);
 void setMotorReverse(void);
+void motorReverse(void);
 void initRelaySchield(void);
-void initVibrationSensor(void);
-uint8_t boardHighLimitState(void);
-uint8_t boardLowLimitState(void);
 void init_tmr0(void);
 void init_timer1(void);
+void initEncoder(void);
 void InitDevice(void);
-uint8_t vibratinSensorState(void);
 void hardMotorStop(void);
 void hardMotorForward(void);
 void hardMotorReverse(void);
@@ -198,149 +231,148 @@ void sendAck(void);
 //////////////////////////////////////////////////////////////////////////
 ISR(USART0_RX_vect){ // interrupt service routine for UART0 -> Debug
 	unsigned char rx_char = UDR0;
-	if(rx_char == 'D'){
-		LED_ON;
-		sendAck();
-		setMotorReverse();
-		motorState = REVERSE;
-		timr1_count = 0;
-		position_count = 0;
-	}
 	
-	if(rx_char == 'R'){
-		raspberry_pi_ready = TRUE;
-	}
-}
-
-ISR(USART1_RX_vect){ // interrupt service routine for UART1 -> GSM Module
-	unsigned char rx_char = UDR1;
-	if(rx_char != 0x00 && rx_char != 0xFF){
+	switch(rx_command_flag){
+		case 0:
+		if(rx_char == '\n'){
+			rx_command_flag = 1;
+			rx_char_count = 0;
+		}
+		break;
 		
+		case 1:
+		if(rx_char == '\r'){
+			rx_command_flag = 0;
+			rx_buffer[rx_char_count] = '\0';
+			if (rx_char_count>0)
+			{
+				if(strncmp("down",rx_buffer,4)== 0){
+					LED_ON(LED_EXT_PORT,LED_EXT);
+					LED_ON(LED_BOARD_PORT,LED_BOARD);
+					sendAck();
+					setMotorReverse();
+					motorState = REVERSE;
+					timr1_count = 0;
+					motor_position_count = 0;
+				}else if (strncmp("ready",rx_buffer,5)== 0){
+					raspberry_pi_ready = TRUE;
+				}else if(strncmp("pwm:",rx_buffer,4)== 0){
+					pwm_limit = atoi(&rx_buffer[4]);
+					printf("pwm:%d\n",pwm_limit);
+				}else if (strncmp("delay:",rx_buffer,6)== 0){
+					hard_motor_delay = atoi(&rx_buffer[6]);
+					if(hard_motor_delay > 244){
+						hard_motor_delay = 244;
+					}
+					printf("delay:%d\n",hard_motor_delay);
+				}else if(strncmp("tone",rx_buffer,4)== 0){// tuning done
+					if(encoder_push_button_flag== 0){
+						encoder_push_button_flag = 1;
+					}
+					motor_position_count = 0;
+				}else if(strncmp("m:",rx_buffer,2)== 0){
+					switch(rx_buffer[2]){
+						case 'F':
+						hardMotorForward();
+						delay_ms(hard_motor_delay);
+						hardMotorStop();
+						break;
+						
+						case 'R':
+						hardMotorReverse();
+						delay_ms(hard_motor_delay);
+						hardMotorStop();
+						break;
+					}
+					printf("%s\n",rx_buffer);
+				}else if (strncmp("led:",rx_buffer,4)== 0)
+				{
+					switch(rx_buffer[4]){
+						case '0':
+							//12v led off
+							LED_OFF(LED_EXT_PORT,LED_12V);
+						break;
+						
+						case '1':
+							//12v led on
+							LED_ON(LED_EXT_PORT,LED_12V);
+						break;
+					}
+				}else if(strncmp("pos:",rx_buffer,4)== 0){
+					motor_position_count_limit = atoi(&rx_buffer[4]);
+					printf("pos:%d\n",motor_position_count_limit);
+				}
+			}
+			rx_char_count = 0;
+			
+		}else{
+			rx_buffer[rx_char_count++] = rx_char;
+			if(rx_command_flag > RX_BUFF){
+				rx_command_flag = 0;
+				printf("\r\nERR: 001\r\n");
+			}
+		}
+		break;
 	}
 }
 
-//Interrupt Service Routine for INT0
+//Interrupt Service Routine for INT0 - Motor CLK
 ISR(INT0_vect){
-	
-	if(ENCODER_PIN & _BV(ENCODER_DT))
+	if(ENCODER_DT_PIN & _BV(MOTOR_ENCODER_DT_PIN))
 	{
-		direction = 0;
+		motor_position_count++;
 	}
 	else
 	{
-		direction = 1;
+		motor_position_count--;
 	}
-	turn_done = 1;
+	motor_turn_done = 1;
 }
 
-ISR(TIMER0_OVF_vect){
-	// motor will move only for its move time limit
-	if (turn_done == 1)
+//Interrupt Service Routine for INT1 - Tuning CLK
+ISR(INT1_vect){
+	if(ENCODER_DT_PIN & _BV(TUNING_ENCODER_DT_PIN))
 	{
-		turn_done = 0;
-		position_count++;
-		LED_TOGGLE;
+		tuning_move_direction = 0;
 	}
-	if (motor_moving_forward == TRUE){
-		if(	position_count == position_count_temp)
-		{
-			position_count = 0;
-			position_count_temp = 0;
-			boardPosition = HIGH;
-			motorState = STOP;
-			setMotorStop();
-		}
-		//motor_move_count++;
-		//if(motor_move_count == 610){
-			//motor_move_count = 0;
-			//motor_forward_moving_state_count = 0;
-			//motor_forward_move_count = 0;
-			//boardPosition = HIGH;
-			//motorState = STOP;
-			//setMotorStop();
-			////delay_ms(1000);// hold few second for stability
-			////send done
-			//sendDone();
-			//printf("Motor forward Move time limit reached!\n");
-		//}
-		motor_forward_move_count++;
-		if(motor_forward_move_count == 12){
-			motor_forward_move_count = 0;
-			if(motor_forward_moving_state_count == 0){
-				motor_duty_cycle_state++;
-				if(motor_duty_cycle_state == 2){
-					motor_duty_cycle_state = 0;
-					motor_forward_moving_state_count = 1;
-				}
-				RELAY_PORT_D0D1 &= ~_BV(RELAY_D0) & ~_BV(RELAY_D1);
-				RELAY_PORT_D2 |= _BV(RELAY_D2);
-				RELAY_PORT_D3 |= _BV(RELAY_D3);
-				printf("Motor forward Move Temp pause\n");
-			}else {
-				motor_forward_moving_state_count = 0;
-				RELAY_PORT_D0D1 |= _BV(RELAY_D0);
-				RELAY_PORT_D0D1 &= ~_BV(RELAY_D1);
-				RELAY_PORT_D2 &= ~_BV(RELAY_D2);
-				RELAY_PORT_D3 |= _BV(RELAY_D3);
-				printf("Motor forward Move phase\n");
-			}
-		}
+	else
+	{
+		tuning_move_direction = 1;
 	}
-	
-	if(motor_moving_reverse == TRUE){
-		if(position_count == 3){
-			position_count_temp = position_count;
-			position_count = 0;
-			boardPosition = LOW;
-			motorState = STOP;
-			setMotorStop();
-		}
-		//motor_move_count++;
-		//if(motor_move_count == 184){//(244/4)=61 , (244/3)=81
-			//motor_move_count = 0;
-			//motor_reverse_moving_state_count = 0;
-			//motor_reverse_move_count = 0;
-			//boardPosition = LOW;
-			//motorState = STOP;
-			//setMotorStop();
-			//printf("Motor reverse Move time limit reached!\n");
-		//}
-		motor_reverse_move_count++;
-		if(motor_reverse_move_count == 12){
-			motor_reverse_move_count = 0;
-			if(motor_forward_moving_state_count == 0){
-				motor_duty_cycle_state++;
-				if(motor_duty_cycle_state == 2){
-					motor_duty_cycle_state = 0;
-					motor_forward_moving_state_count = 1;
-				}
-				RELAY_PORT_D0D1 &= ~_BV(RELAY_D0) & ~_BV(RELAY_D1);
-				RELAY_PORT_D2 |= _BV(RELAY_D2);
-				RELAY_PORT_D3 |= _BV(RELAY_D3);
-				printf("Motor reverse Move Temp pause\n");
-			}else {
-				motor_forward_moving_state_count = 0;
-				RELAY_PORT_D0D1 &= ~_BV(RELAY_D0);
-				RELAY_PORT_D0D1 |= _BV(RELAY_D1);
-				RELAY_PORT_D2 |= _BV(RELAY_D2);
-				RELAY_PORT_D3 &= ~_BV(RELAY_D3);
-				printf("Motor reverse Move phase\n");
-			}
-		}
+	tuning_turn_done = 1;
+}
+
+//Interrupt Service Routine for INT2 - Tuning SW
+ISR(INT2_vect){
+	if(encoder_push_button_flag== 0){
+		encoder_push_button_flag = 1;
 	}
+	motor_position_count = 0;
+}
+
+
+ISR(TIMER0_OVF_vect){	
+	if(encoder_push_button_flag == 1)
+	{
 		
-	// checking if board is at low position and
-	// waiting till its stay limit to start for high position
-	if (boardPosition==LOW && boardHighAuto == TRUE){
-		board_low_position_count++;
-		if(board_low_position_count == 244){
-			board_low_position_count = 0;
-			board_low_position_sec_count++;
-			if (board_low_position_sec_count == BOARD_LOW_POSITION_STAY_LIMIT){
-				board_low_position_sec_count = 0;
-				motorState = FORWARD;
-				setMotorForward();
-				printf("Board Low Position Stay time limit reached!\n");
+	}
+	else
+	{
+		if(tuning_turn_done == 1){
+			tuning_turn_done = 0;
+			if(tuning_move_direction == 1)
+			{
+				hardMotorForward();
+				delay_ms(hard_motor_delay);
+				hardMotorStop();
+				printf("m:F\n");
+			}
+			else
+			{
+				hardMotorReverse();
+				delay_ms(hard_motor_delay);
+				hardMotorStop();
+				printf("m:R\n");
 			}
 		}
 	}
@@ -360,22 +392,7 @@ ISR(TIMER0_OVF_vect){
 }
 
 ISR(TIMER1_OVF_vect){//interrupt service routine for TIMER 1 -> GSM Parser
-	//if(board_hit_flag == TRUE){
-		//timr1_count++;
-		//if(timr1_count == 488){// 244*2
-			//board_hit_flag = FALSE;
-			//timr1_count = 0;
-			//LED_OFF;
-			////// LED blink
-			////if(led_state == 0){
-				////led_state = 1;
-				////LED_ON;
-			////}else{
-				////led_state = 0;
-				////LED_OFF;
-			////}
-		//}	
-	//}
+	
 }
 
 // delay for a minimum of <ms>
@@ -395,24 +412,27 @@ void delay_us(uint16_t us){
 }
 
 void initLED(void){	
-	LED_DDR |= _BV(LED);
-	LED_OFF;
+	LED_EXT_DDR |= _BV(LED_EXT);
+	LED_EXT_DDR |= _BV(LED_EXT);
+	LED_BOARD_DDR |= _BV(LED_BOARD);
+	LED_OFF(LED_EXT_PORT,LED_EXT);
+	LED_OFF(LED_EXT_PORT,LED_12V);
+	LED_OFF(LED_BOARD_PORT,LED_BOARD);
 }
 
-void setINT(uint8_t state){
-	if(state == TRUE){
-		limit_switch_high_flag = FALSE;
-		limit_switch_low_flag = FALSE;
-		cli();
-		EIMSK |= _BV(INT0) | _BV(INT1);
-		EICRA |= _BV(ISC00) | _BV(ISC10);
-		sei();
-	}else{
-		EIMSK &= ~_BV(INT0) & ~_BV(INT1);
-	}
+void motorStopSoft(void){
+	RELAY_PORT_D0D1 &= ~_BV(RELAY_D0) & ~_BV(RELAY_D1);
+	RELAY_PORT_D2 &= ~_BV(RELAY_D2);
+	RELAY_PORT_D3 &= ~_BV(RELAY_D3);
 }
 
-void setMotorStop(void){
+void motorStop(void){
+	RELAY_PORT_D0D1 &= ~_BV(RELAY_D0) & ~_BV(RELAY_D1);
+	RELAY_PORT_D2 |= _BV(RELAY_D2);
+	RELAY_PORT_D3 |= _BV(RELAY_D3);
+}
+
+void setMotorStop(uint8_t soft){
 	motor_moving_forward = FALSE;
 	motor_moving_reverse = FALSE;
 	motor_move_count = 0;
@@ -421,15 +441,23 @@ void setMotorStop(void){
 	motor_duty_cycle_state = 0;
 	motor_forward_move_count = 0;
 	motor_reverse_move_count = 0;
-	//setINT(FALSE);
-	RELAY_PORT_D0D1 &= ~_BV(RELAY_D0) & ~_BV(RELAY_D1);
-	RELAY_PORT_D2 |= _BV(RELAY_D2);
-	RELAY_PORT_D3 |= _BV(RELAY_D3);
-	//delay_ms(2000);
-	//RELAY_PORT_D2 &= ~_BV(RELAY_D2);
-	//RELAY_PORT_D3 &= ~_BV(RELAY_D3);
+	if(soft == 1)
+	{
+		motorStopSoft();
+	}
+	else
+	{
+		motorStop();
+	}
 	motorState = MNONE;
 	topu = 1;
+}
+
+void motorForward(void){
+	RELAY_PORT_D0D1 |= _BV(RELAY_D0);
+	RELAY_PORT_D0D1 &= ~_BV(RELAY_D1);
+	RELAY_PORT_D2 &= ~_BV(RELAY_D2);
+	RELAY_PORT_D3 |= _BV(RELAY_D3);
 }
 
 void setMotorForward(void){
@@ -438,15 +466,17 @@ void setMotorForward(void){
 	motor_move_sec_count = 0;
 	motor_duty_cycle_state = 0;
 	boardPosition = BNONE;
-	//setINT(TRUE);
-	RELAY_PORT_D0D1 |= _BV(RELAY_D0);
-	RELAY_PORT_D0D1 &= ~_BV(RELAY_D1);
-	RELAY_PORT_D2 &= ~_BV(RELAY_D2);
-	RELAY_PORT_D3 |= _BV(RELAY_D3);
+	motorForward();
 	motor_forward_moving_state_count = 0;
-	//motorState = MNONE;
 	motor_moving_forward = TRUE;
 	motor_moving_reverse = FALSE;
+}
+
+void motorReverse(void){
+	RELAY_PORT_D0D1 &= ~_BV(RELAY_D0);
+	RELAY_PORT_D0D1 |= _BV(RELAY_D1);
+	RELAY_PORT_D2 |= _BV(RELAY_D2);
+	RELAY_PORT_D3 &= ~_BV(RELAY_D3);
 }
 
 void setMotorReverse(void){
@@ -454,13 +484,8 @@ void setMotorReverse(void){
 	motor_reverse_move_count = 0;
 	motor_move_sec_count = 0;
 	boardPosition = BNONE;
-	//setINT(TRUE);
-	RELAY_PORT_D0D1 &= ~_BV(RELAY_D0);
-	RELAY_PORT_D0D1 |= _BV(RELAY_D1);
-	RELAY_PORT_D2 |= _BV(RELAY_D2);
-	RELAY_PORT_D3 &= ~_BV(RELAY_D3);
+	motorReverse();
 	motor_reverse_moving_state_count = 0;
-	//motorState = MNONE;
 	motor_moving_reverse = TRUE;
 	motor_moving_forward = FALSE;
 }
@@ -471,13 +496,8 @@ void initRelaySchield(void){
 	RELAY_DDR_D2 |= _BV(RELAY_D2);
 	RELAY_DDR_D3 |= _BV(RELAY_D3);
 	// setting all pin low
-	setMotorStop();
+	setMotorStop(1);
 	//printf("Relay Shield Initialized...\n");
-}
-
-void initVibrationSensor(void){
-	VIBS_DDR &= ~(1 << VIBS_SIG_IN);
-	//printf("Vibration Sensor Initialized...\n");
 }
 
 /* Interrupt at every (1/(FCPU/256))x256 sec
@@ -512,7 +532,8 @@ void init_timer1(void)
 
 void sendDone(void){
 	printf("done\n");
-	LED_OFF;
+	LED_OFF(LED_EXT_PORT,LED_EXT);
+	LED_OFF(LED_BOARD_PORT,LED_BOARD);
 	board_hit_flag = TRUE;
 }
 
@@ -524,13 +545,46 @@ void sendDeviceReady(void){
 	printf("Device Ready...\n");
 }
 
+void initEncoder(void){
+	ENCODER_CLK_SW_DDR &= ~_BV(MOTOR_ENCODER_CLK);
+	ENCODER_DT_DDR &= ~_BV(MOTOR_ENCODER_DT);
+	ENCODER_CLK_SW_DDR &= ~_BV(TUNING_ENCODER_CLK);
+	ENCODER_DT_DDR &= ~_BV(TUNING_ENCODER_DT);
+	ENCODER_CLK_SW_DDR &= ~_BV(TUNING_ENCODER_SW);
+	ENCODER_CLK_SW_PORT |= _BV(MOTOR_ENCODER_CLK) | _BV(TUNING_ENCODER_SW);// Enable pulled up
+	ENCODER_DT_PORT |= _BV(MOTOR_ENCODER_DT);
+	
+	EIMSK |= _BV(INT0) |  _BV(INT1) | _BV(INT2);
+	 // INT0 - Falling edge
+	 // INT1 - Falling edge
+	 // INT2 - The low level
+	EICRA |= _BV(ISC01) | _BV(ISC11);
+	EICRA &= ~_BV(ISC20);
+	EICRA &= ~_BV(ISC21);
+}
+
 void InitDevice(void){
 	cli();
+	delay_ms(10);
+	initEncoder();
+	debug_init(debug_BaudValue,1);
+	stdout = &debug;
+	initLED();
+	// init_tmr0();
+	// init_timer1();
+	initRelaySchield();	
+	delay_ms(10);
+	sei();
+}
+
+int main(void)
+{
+	pwm_limit = MOTOR_PWM_CYCLE;	
 	board_hit_flag = FALSE;
 	raspberry_pi_ready = FALSE;
 	motorState = MNONE;
 	boardPosition = BNONE;
-	motor_moving_forward = FALSE;	
+	motor_moving_forward = FALSE;
 	motor_moving_reverse = FALSE;
 	board_low_position_count = 0;
 	board_low_position_sec_count = 0;
@@ -540,166 +594,176 @@ void InitDevice(void){
 	motor_forward_move_count = 0;
 	motor_reverse_move_count = 0;
 	motor_duty_cycle_state = 0;
-	delay_ms(10);
-	ENCODER_DDR &= ~_BV(CLK);
-	ENCODER_DDR &= ~_BV(DT);
-	debug_init(debug_BaudValue,1);
-	//uart_init(uart_BaudValue,1);
-	stdout = &debug;
-	initLED();
-	EIMSK |= _BV(INT0);
-	EICRA |= _BV(ISC01);
-	init_tmr0();
-	init_timer1();
-	initVibrationSensor();
-	initRelaySchield();
-	sei();
-}
-
-uint8_t vibratinSensorState(void){
-	if (!(VIBS_PIN & (1<<VIBS_SIG_IN))){
-		return TRUE;
-	}else{
-		return FALSE;	
-	}
-}
-
-uint8_t boardHighLimitState(void){
-	if((LIMIT_SWITCH_PIN & (1<<LIMIT_SWITCH_HIGH))){ // check for HIGH state
-		return TRUE;
-	}else{
-		return FALSE;
-	}
-}
-
-uint8_t boardLowLimitState(void){
-	if((LIMIT_SWITCH_PIN & (1<<LIMIT_SWITCH_LOW))){ // check for HIGH state
-		return TRUE;
-	}else{
-		return FALSE;
-	}
-}
-
-int main(void)
-{
-	position_count = 0;
-	direction = 0;
-	position_count = 0;
-	topu = 0;
-	turn_done = 0;
+	motor_position_count = 0;
+	motor_move_direction = 0;
+	
+	motor_turn_done = 0;
+	encoder_push_button_flag = 0;
+	hard_motor_delay = 40;
+	motor_position_count_limit = POSITION_COUNT_LIMIT;
+	
 	InitDevice();
+	
+	printf("init\n");
+	
 	delay_ms(1000);
-	// initially checks if board is at high 
-	// or else start motor move to forward
-	//if(boardPosition != HIGH){
 	
-	//printf("Waiting for Rraspberry PI to Ready...\n");
-	//while(TRUE){// waits until raspberry pi is ready
-		//delay_ms(100);
-		//if (raspberry_pi_ready == TRUE){
-			//break;
-		//}
-	//}
+	// waits until tuning button is pressed
+	while(!encoder_push_button_flag){
+		delay_ms(250);
+		LED_TOGGLE(LED_EXT_PORT,LED_EXT);
+		LED_TOGGLE(LED_BOARD_PORT,LED_BOARD);
+	}
+	LED_OFF(LED_EXT_PORT,LED_EXT);
+	LED_OFF(LED_BOARD_PORT,LED_BOARD);
 	
-	// checks if the board is at high when device is starting
-	//if(boardHighLimitState() == FALSE){
-		//printf("Moving motor Forward to set the board high\n");
-		//setMotorForward(); 
-	//}else{
-		//boardPosition = HIGH;
-		//motor_moving_forward = FALSE;
-		//motor_moving_reverse = FALSE;
-		//printf("Board is initially at high\n");
-	//}
+	delay_ms(1000);
 	
 	sendDeviceReady();
+	topu = 0;
 	
     while(TRUE)
     {
-		// if board at high position waits for board to hit
-		// then start motor move to reverse
-		//if(boardHighLimitState() == TRUE){
-			//printf("H\n");
-		//}else if(boardLowLimitState() == TRUE){
-			//printf("L\n");
-		//}
-		//////////////////////////////////////////////////////////////////////////
-		/*
-		if(boardHighLimitState() == TRUE && motor_moving_forward == TRUE){
-			//if(limit_switch_high_flag == FALSE){
-			setMotorStop();
-			delay_ms(1000);// hold few second for stability
-			//send done
-			sendDone();
-			motorState = STOP;
-			boardPosition = HIGH;
-			limit_switch_high_flag = TRUE;
-			limit_switch_low_flag = FALSE;
-			printf("Board High\n");
+		if (motor_moving_forward == TRUE){		
+			// motor will move only for its move time limit
+			//motor_move_count++;
+			//if(motor_move_count == 610){
+				//motor_move_count = 0;
+				//motor_forward_moving_state_count = 0;
+				//motor_forward_move_count = 0;
+				//boardPosition = HIGH;
+				//motorState = STOP;
+				//setMotorStop();
+				////delay_ms(1000);// hold few second for stability
+				////send done
+				//sendDone();
+				//printf("Motor forward Move time limit reached!\n");
 			//}
-		}else if (boardLowLimitState() == TRUE && motor_moving_reverse== TRUE){
-			//if (limit_switch_low_flag == FALSE){
-			setMotorStop();
-			motorState = STOP;
-			boardPosition = LOW;
-			limit_switch_low_flag = TRUE;
-			limit_switch_high_flag = FALSE;
-			board_low_position_count = 0;
-			board_low_position_sec_count = 0;
-			printf("Board Low\n");
+			if(	motor_position_count <= 0)
+			{
+				motor_position_count = 0;
+				//motor_position_count_temp = 0;
+				boardPosition = HIGH;
+				motorState = STOP;
+				setMotorStop(0);
+			}
+			else if (motor_position_count > 0)
+			{
+				if (motor_position_count > (motor_position_count_temp/2))
+				{
+					// HIGH speed
+					pwm_limit = HIGH_PWM;
+					printf("H\n");
+				} 
+				else
+				{
+					// LOW speed
+					pwm_limit = LOW_PWM;
+					printf("L\n");
+				}
+				motor_forward_move_count++;
+				if(motor_forward_move_count == pwm_limit){
+					motor_forward_move_count = 0;
+					if(motor_forward_moving_state_count == 0){
+						motor_duty_cycle_state++;
+						if(motor_duty_cycle_state == 2){
+							motor_duty_cycle_state = 0;
+							motor_forward_moving_state_count = 1;
+						}
+						motorStopSoft();
+						printf("MFMTP\n");
+					}else {
+						motor_forward_moving_state_count = 0;
+						motorForward();
+						printf("MFM\n");
+					}
+				}
+			}
+			//else // if (position_count > motor_position_count_temp)
+			//{
+			//
 			//}
 		}
-		*/
-		//else if(boardPosition == HIGH && motor_moving_forward == FALSE && motor_moving_reverse == FALSE){
-			////delay_ms(10);
-			////printf("it is here\n");
-			//if (!(VIBS_PIN & (1<<VIBS_SIG_IN))){
-				//setMotorReverse();
-				//motorState = REVERSE;
-				////printf("Board Hit\n");
+		// reverse
+		if(motor_moving_reverse == TRUE){
+			//motor_move_count++;
+			//if(motor_move_count == 184){//(244/4)=61 , (244/3)=81
+				//motor_move_count = 0;
+				//motor_reverse_moving_state_count = 0;
+				//motor_reverse_move_count = 0;
+				//boardPosition = LOW;
+				//motorState = STOP;
+				//setMotorStop();
+				//printf("Motor reverse Move time limit reached!\n");
 			//}
-		//}
+			if(motor_position_count == motor_position_count_limit){
+				//motor_position_count_temp = motor_position_count;
+				boardPosition = LOW;
+				motorState = STOP;
+				setMotorStop(0);
+			}
+			else if (motor_position_count < motor_position_count_limit)
+			{
+				if(motor_position_count < POSITION_COUNT_LIMIT/2)
+				{
+					// increase speed
+					pwm_limit = HIGH_PWM;
+					printf("H\n");
+				}
+				else
+				{
+					// decrease speed
+					pwm_limit = LOW_PWM;
+					printf("L\n");
+				}			
+				motor_reverse_move_count++;
+				if(motor_reverse_move_count == pwm_limit){
+					motor_reverse_move_count = 0;
+					if(motor_forward_moving_state_count == 0){
+						motor_duty_cycle_state++;
+						if(motor_duty_cycle_state == 2){
+							motor_duty_cycle_state = 0;
+							motor_forward_moving_state_count = 1;
+						}
+						motorStopSoft();
+						printf("MRMTP\n");
+					}else {
+						motor_forward_moving_state_count = 0;
+						motorReverse();
+						printf("MRM\n");
+					}
+				}
+			}
+			else // if (position_count > POSITION_COUNT_LIMIT)
+			{
+				printf("W\n");
+			}
+		}
 		
-		//////////////////////////////////////////////////////////////////////////
-		
-		// motor state change and move
-		//if(motorState == FORWARD){
-			//motorState = MNONE;
-			//printf("Motor Rotating Forward\n");
-			////setMotorForward();
-		//}else if(motorState == REVERSE){
-			//motorState = MNONE;
-			//printf("Motor Rotating Reverse\n");
-			////setMotorReverse();
-		//}else if(motorState == STOP){
-			//motorState = MNONE;
-			//printf("Motor Stopped\n");
-			////setMotorStop();			
-		//}
-		
-		
-		//if(turn_done == 1)
-		//{
-			//if(direction==1)
-			//{
-				//position_count++;
-			//}
-			//else
-			//{
-				//position_count--;
-			//}
-			//turn_done = 0;
-			//printf("Count: %d\n",position_count);
-		//}
+		// checking if board is at low position and
+		// waiting till its stay limit to start for high position
+		if (boardPosition==LOW && boardHighAuto == TRUE){
+			board_low_position_count++;
+			if(board_low_position_count == 24){ // 244(=1s)/1000ms = 0.244(=1ms) , 100 ms = 24.4
+				board_low_position_count = 0;
+				motorState = FORWARD;
+				//motor_position_count = 0;
+				setMotorForward();
+				printf("BLPSTLR\n");
+			}
+		}
 		if(topu == 1)
 		{
 			topu = 0;
-			printf("Stopped: %d\n",position_count);
+			printf("Stopped: %d\n",motor_position_count);
+		}
+		if (motor_turn_done == 1)
+		{
+			motor_turn_done = 0;
+			printf("MPC:%d,d:%d\n",motor_position_count,motor_move_direction);
 		}
     }
 }
-
-
 
 void hardMotorStop(void){
 	RELAY_PORT_D0D1 &= ~_BV(RELAY_D0) & ~_BV(RELAY_D1);

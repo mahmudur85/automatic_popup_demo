@@ -1,0 +1,10 @@
+$0D$0Aready$0D$0A
+$0D$0Adown$0D$0A####Board down command
+$0D$0Apwm:12$0D$0A
+$0D$0Adelay:10$0D$0A
+$0D$0Atone$0D$0A####tuning done
+$0D$0Am:F$0D$0A####tuning moew: Forward
+$0D$0Am:R$0D$0A####tuning moew: Reverse
+$0D$0Apos:5R$0D$0A
+$0D$0Aled:0R$0D$0A####12v LED off
+$0D$0led:1R$0D$0A####12v LED on
