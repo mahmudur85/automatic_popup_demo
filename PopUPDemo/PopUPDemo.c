@@ -132,7 +132,7 @@
  #define	POSITION_COUNT_LIMIT		3
  #define	HIGH_PWM					12
  #define	LOW_PWM						24
- #define	MOTOR_PWM_CYCLE				24 // 8 * 3 = 24 (200ms period)
+ #define	MOTOR_PWM_CYCLE				2 // 8 * 3 = 24 (200ms period)
  
 //////////////////////////////////////////////////////////////////////////
 static FILE debug =  FDEV_SETUP_STREAM (debug_stream, NULL, _FDEV_SETUP_WRITE);
@@ -159,8 +159,9 @@ volatile uint8_t limit_switch_low_flag = FALSE;
 volatile uint8_t board_hit_flag = FALSE;
 volatile uint8_t raspberry_pi_ready = FALSE;
 volatile uint8_t topu = 0;
-volatile uint8_t pwm_limit = 0;
-volatile uint8_t hard_motor_delay = 0;
+volatile uint16_t pwm_limit_forward = 0;
+volatile uint16_t pwm_limit_reverse = 0;
+volatile uint16_t hard_motor_delay = 0;
 
 enum BoardPosition{
 	BNONE,
@@ -257,13 +258,13 @@ ISR(USART0_RX_vect){ // interrupt service routine for UART0 -> Debug
 				}else if (strncmp("ready",rx_buffer,5)== 0){
 					raspberry_pi_ready = TRUE;
 				}else if(strncmp("pwm:",rx_buffer,4)== 0){
-					pwm_limit = atoi(&rx_buffer[4]);
-					printf("pwm:%d\n",pwm_limit);
+					pwm_limit_forward = atoi(&rx_buffer[4]);
+					printf("pwm:%d\n",pwm_limit_forward);
 				}else if (strncmp("delay:",rx_buffer,6)== 0){
 					hard_motor_delay = atoi(&rx_buffer[6]);
-					if(hard_motor_delay > 244){
-						hard_motor_delay = 244;
-					}
+					//if(hard_motor_delay > 244){
+						//hard_motor_delay = 244;
+					//}
 					printf("delay:%d\n",hard_motor_delay);
 				}else if(strncmp("tone",rx_buffer,4)== 0){// tuning done
 					if(encoder_push_button_flag== 0){
@@ -301,6 +302,9 @@ ISR(USART0_RX_vect){ // interrupt service routine for UART0 -> Debug
 				}else if(strncmp("pos:",rx_buffer,4)== 0){
 					motor_position_count_limit = atoi(&rx_buffer[4]);
 					printf("pos:%d\n",motor_position_count_limit);
+				}else if(strncmp("rev:",rx_buffer,4)== 0){
+					pwm_limit_reverse = atoi(&rx_buffer[4]);
+					printf("rev:%d\n",pwm_limit_reverse);
 				}
 			}
 			rx_char_count = 0;
@@ -579,7 +583,8 @@ void InitDevice(void){
 
 int main(void)
 {
-	pwm_limit = MOTOR_PWM_CYCLE;	
+	pwm_limit_forward = 24;	
+	pwm_limit_reverse = 10;
 	board_hit_flag = FALSE;
 	raspberry_pi_ready = FALSE;
 	motorState = MNONE;
@@ -609,11 +614,11 @@ int main(void)
 	delay_ms(1000);
 	
 	// waits until tuning button is pressed
-	while(!encoder_push_button_flag){
-		delay_ms(250);
-		LED_TOGGLE(LED_EXT_PORT,LED_EXT);
-		LED_TOGGLE(LED_BOARD_PORT,LED_BOARD);
-	}
+	//while(!encoder_push_button_flag){
+		//delay_ms(250);
+		//LED_TOGGLE(LED_EXT_PORT,LED_EXT);
+		//LED_TOGGLE(LED_BOARD_PORT,LED_BOARD);
+	//}
 	LED_OFF(LED_EXT_PORT,LED_EXT);
 	LED_OFF(LED_BOARD_PORT,LED_BOARD);
 	
@@ -624,127 +629,79 @@ int main(void)
 	
     while(TRUE)
     {
+		delay_ms(50);
 		if (motor_moving_forward == TRUE){		
 			// motor will move only for its move time limit
-			//motor_move_count++;
-			//if(motor_move_count == 610){
-				//motor_move_count = 0;
-				//motor_forward_moving_state_count = 0;
-				//motor_forward_move_count = 0;
-				//boardPosition = HIGH;
-				//motorState = STOP;
-				//setMotorStop();
-				////delay_ms(1000);// hold few second for stability
-				////send done
-				//sendDone();
-				//printf("Motor forward Move time limit reached!\n");
-			//}
-			if(	motor_position_count <= 0)
-			{
-				motor_position_count = 0;
-				//motor_position_count_temp = 0;
+			motor_move_count++;
+			if(motor_move_count == pwm_limit_forward){
+				motor_move_count = 0;
+				motor_forward_moving_state_count = 0;
+				motor_forward_move_count = 0;
 				boardPosition = HIGH;
 				motorState = STOP;
 				setMotorStop(0);
+				//delay_ms(1000);// hold few second for stability
+				//send done
+				sendDone();
+				printf("Motor forward Move time limit reached!\n");
 			}
-			else if (motor_position_count > 0)
-			{
-				if (motor_position_count > (motor_position_count_temp/2))
-				{
-					// HIGH speed
-					pwm_limit = HIGH_PWM;
-					printf("H\n");
-				} 
-				else
-				{
-					// LOW speed
-					pwm_limit = LOW_PWM;
-					printf("L\n");
-				}
-				motor_forward_move_count++;
-				if(motor_forward_move_count == pwm_limit){
-					motor_forward_move_count = 0;
-					if(motor_forward_moving_state_count == 0){
-						motor_duty_cycle_state++;
-						if(motor_duty_cycle_state == 2){
-							motor_duty_cycle_state = 0;
-							motor_forward_moving_state_count = 1;
-						}
-						motorStopSoft();
-						printf("MFMTP\n");
-					}else {
-						motor_forward_moving_state_count = 0;
-						motorForward();
-						printf("MFM\n");
-					}
-				}
-			}
-			//else // if (position_count > motor_position_count_temp)
-			//{
-			//
+			//motor_forward_move_count++;
+			//if(motor_forward_move_count == (pwm_limit*3)){
+				//motor_forward_move_count = 0;
+				//motorForward();
+				////if(motor_forward_moving_state_count == 0){
+					////motor_duty_cycle_state++;
+					////if(motor_duty_cycle_state == 2){
+						////motor_duty_cycle_state = 0;
+						////motor_forward_moving_state_count = 1;
+					////}
+					////motorStopSoft();
+					////printf("MFMTP\n");
+				////}else {
+					////motor_forward_moving_state_count = 0;
+					////motorForward();
+					////printf("MFM\n");
+				////}
 			//}
 		}
 		// reverse
 		if(motor_moving_reverse == TRUE){
-			//motor_move_count++;
-			//if(motor_move_count == 184){//(244/4)=61 , (244/3)=81
-				//motor_move_count = 0;
-				//motor_reverse_moving_state_count = 0;
-				//motor_reverse_move_count = 0;
-				//boardPosition = LOW;
-				//motorState = STOP;
-				//setMotorStop();
-				//printf("Motor reverse Move time limit reached!\n");
-			//}
-			if(motor_position_count == motor_position_count_limit){
-				//motor_position_count_temp = motor_position_count;
+			motor_move_count++;
+			if(motor_move_count == pwm_limit_reverse){//(244/4)=61 , (244/3)=81
+				motor_move_count = 0;
+				motor_reverse_moving_state_count = 0;
+				motor_reverse_move_count = 0;
 				boardPosition = LOW;
 				motorState = STOP;
 				setMotorStop(0);
+				printf("Motor reverse Move time limit reached!\n");
 			}
-			else if (motor_position_count < motor_position_count_limit)
-			{
-				if(motor_position_count < POSITION_COUNT_LIMIT/2)
-				{
-					// increase speed
-					pwm_limit = HIGH_PWM;
-					printf("H\n");
-				}
-				else
-				{
-					// decrease speed
-					pwm_limit = LOW_PWM;
-					printf("L\n");
-				}			
-				motor_reverse_move_count++;
-				if(motor_reverse_move_count == pwm_limit){
-					motor_reverse_move_count = 0;
-					if(motor_forward_moving_state_count == 0){
-						motor_duty_cycle_state++;
-						if(motor_duty_cycle_state == 2){
-							motor_duty_cycle_state = 0;
-							motor_forward_moving_state_count = 1;
-						}
-						motorStopSoft();
-						printf("MRMTP\n");
-					}else {
-						motor_forward_moving_state_count = 0;
-						motorReverse();
-						printf("MRM\n");
-					}
-				}
-			}
-			else // if (position_count > POSITION_COUNT_LIMIT)
-			{
-				printf("W\n");
-			}
+					
+			//motor_reverse_move_count++;
+			//if(motor_reverse_move_count == pwm_limit){
+				//motor_reverse_move_count = 0;
+				//motorReverse();
+				////if(motor_forward_moving_state_count == 0){
+					////motor_duty_cycle_state++;
+					////if(motor_duty_cycle_state == 2){
+						////motor_duty_cycle_state = 0;
+						////motor_forward_moving_state_count = 1;
+					////}
+					////motorStopSoft();
+					////printf("MRMTP\n");
+				////}else {
+					////motor_forward_moving_state_count = 0;
+					////motorReverse();
+					////printf("MRM\n");
+				////}
+			//}
 		}
 		
 		// checking if board is at low position and
 		// waiting till its stay limit to start for high position
 		if (boardPosition==LOW && boardHighAuto == TRUE){
 			board_low_position_count++;
-			if(board_low_position_count == 24){ // 244(=1s)/1000ms = 0.244(=1ms) , 100 ms = 24.4
+			if(board_low_position_count == 1){ // 244(=1s)/1000ms = 0.244(=1ms) , 100 ms = 24.4
 				board_low_position_count = 0;
 				motorState = FORWARD;
 				//motor_position_count = 0;
