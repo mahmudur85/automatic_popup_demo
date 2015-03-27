@@ -9,3 +9,4 @@ $0D$0Apos:5R$0D$0A
 $0D$0Aled:0R$0D$0A####12v LED off
 $0D$0led:1R$0D$0A####12v LED on
 $0D$0Arev:4$0D$0A
+$0D$0Afrw:10$0D$0A

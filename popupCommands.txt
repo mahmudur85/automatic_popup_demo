@@ -1,0 +1,9 @@
+Commands			| Parameters
+-----------------------------------
+Board down command	| \r\ndown\r\n
+Manual Forward		| \r\nm:F$\r\n
+Manual Reverse		| \r\nm:R\r\n
+Manual Hard Stop	| \r\nm:S\r\n
+Manual Soft Stop	| \r\nm:s\r\n
+12v LED off			| \r\nled:0\r\n
+12v LED on			| \r\nled:1\r\n

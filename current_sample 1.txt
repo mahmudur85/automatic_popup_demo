@@ -1,0 +1,66 @@
+ack<CR><LF>
+Current: -3123 mV[448]<CR><LF>
+Current: -3123 mV[448]<CR><LF>
+Current: -3123 mV[448]<CR><LF>
+Current: -1562 mV[480]<CR><LF>
+Current: -1415 mV[483]<CR><LF>
+Motor reverse Move time limit reached!<CR><LF>
+BLPSTLR<CR><LF>
+Stopped: 0<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 2926 mV[572]<CR><LF>
+Current: 3853 mV[591]<CR><LF>
+Current: 3853 mV[591]<CR><LF>
+Current: 3853 mV[591]<CR><LF>
+Current: 3853 mV[591]<CR><LF>
+Current: 3853 mV[591]<CR><LF>
+Current: 3463 mV[583]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 2926 mV[572]<CR><LF>
+Current: 4829 mV[611]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5463 mV[624]<CR><LF>
+done<CR><LF>
+Motor forward Move time limit reached!<CR><LF>
+Stopped: 0<CR><LF>
+*******************************************************************
+ack<CR><LF>
+Current: -4732 mV[415]<CR><LF>
+Current: -2781 mV[455]<CR><LF>
+Current: -3123 mV[448]<CR><LF>
+Current: -2781 mV[455]<CR><LF>
+Current: -1562 mV[480]<CR><LF>
+Motor reverse Move time limit reached!<CR><LF>
+BLPSTLR<CR><LF>
+Stopped: 0<CR><LF>
+Current: 5463 mV[624]<CR><LF>
+Current: 5463 mV[624]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 2926 mV[572]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 3853 mV[591]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 3073 mV[575]<CR><LF>
+Current: 2926 mV[572]<CR><LF>
+Current: 3024 mV[574]<CR><LF>
+Current: 5463 mV[624]<CR><LF>
+Current: 5463 mV[624]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+Current: 5853 mV[632]<CR><LF>
+done<CR><LF>
+Motor forward Move time limit reached!<CR><LF>
+Stopped: 0<CR><LF>
+

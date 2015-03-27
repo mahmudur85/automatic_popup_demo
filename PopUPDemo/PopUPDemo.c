@@ -10,6 +10,7 @@
  #include <stdlib.h>
  #include <avr/interrupt.h>
  #include <avr/pgmspace.h>
+ #include <avr/eeprom.h>
  #include <math.h>
  #ifndef F_CPU
 	 #define F_CPU 16000000UL
@@ -25,12 +26,12 @@
  //LED Pin
  #define LED_BOARD_DDR		DDRB
  #define LED_BOARD_PORT		PORTB
- #define LED_BOARD			PB7
+ #define LED_BOARD			PB7		// pin 13
  
  #define LED_EXT_DDR	DDRA
  #define LED_EXT_PORT	PORTA
- #define LED_EXT		PA2
- #define LED_12V		PA3
+ #define LED_EXT		PA2			// pin 24
+ #define LED_12V		PA3			// pin 25
 
  // LED Operation
  #define LED_ON(PORT,PIN)		PORT |=  _BV(PIN)
@@ -134,6 +135,14 @@
  #define	LOW_PWM						24
  #define	MOTOR_PWM_CYCLE				2 // 8 * 3 = 24 (200ms period)
  
+ #define PWM_LIMIT_FORWARD_ADDRESS			0x01
+ #define PWM_LIMIT_FORWARD_SET_FLAG_ADDR	0x00
+ #define PWM_LIMIT_FORWARD_SET_FLAG			'f'
+ #define PWM_LIMIT_REVERSE_ADDRESS			0x02
+ #define PWM_LIMIT_REVERSE_SET_FLAG_ADDR	0x03
+ #define PWM_LIMIT_REVERSE_SET_FLAG			'r'
+//////////////////////////////////////////////////////////////////////////
+#define CURRENT_MEASURE_PIN			0
 //////////////////////////////////////////////////////////////////////////
 static FILE debug =  FDEV_SETUP_STREAM (debug_stream, NULL, _FDEV_SETUP_WRITE);
 
@@ -205,6 +214,11 @@ uint8_t rx_char_count = 0;
 #define RX_BUFF	64
 char rx_buffer[64];
 
+
+volatile uint16_t adcValue = 0;
+volatile uint16_t sensorValue = 0;
+volatile long current = 0;
+
 //////////////////////////////////////////////////////////////////////////
 
 void delay_ms(uint16_t ms);
@@ -222,6 +236,8 @@ void init_tmr0(void);
 void init_timer1(void);
 void initEncoder(void);
 void InitDevice(void);
+void InitADC(void);
+uint16_t adcRead(uint8_t adcx);
 void hardMotorStop(void);
 void hardMotorForward(void);
 void hardMotorReverse(void);
@@ -257,9 +273,13 @@ ISR(USART0_RX_vect){ // interrupt service routine for UART0 -> Debug
 					motor_position_count = 0;
 				}else if (strncmp("ready",rx_buffer,5)== 0){
 					raspberry_pi_ready = TRUE;
-				}else if(strncmp("pwm:",rx_buffer,4)== 0){
+				}else if(strncmp("frw:",rx_buffer,4)== 0){
 					pwm_limit_forward = atoi(&rx_buffer[4]);
-					printf("pwm:%d\n",pwm_limit_forward);
+					eeprom_write_byte((uint8_t*)PWM_LIMIT_FORWARD_ADDRESS,(uint8_t)pwm_limit_forward);
+					eeprom_busy_wait();
+					eeprom_write_byte((uint8_t*)PWM_LIMIT_FORWARD_SET_FLAG_ADDR,PWM_LIMIT_FORWARD_SET_FLAG);
+					eeprom_busy_wait();
+					printf("frw:%d\n",pwm_limit_forward);
 				}else if (strncmp("delay:",rx_buffer,6)== 0){
 					hard_motor_delay = atoi(&rx_buffer[6]);
 					//if(hard_motor_delay > 244){
@@ -304,6 +324,10 @@ ISR(USART0_RX_vect){ // interrupt service routine for UART0 -> Debug
 					printf("pos:%d\n",motor_position_count_limit);
 				}else if(strncmp("rev:",rx_buffer,4)== 0){
 					pwm_limit_reverse = atoi(&rx_buffer[4]);
+					eeprom_write_byte((uint8_t*)PWM_LIMIT_REVERSE_ADDRESS,(uint8_t)pwm_limit_reverse);
+					eeprom_busy_wait();
+					eeprom_write_byte((uint8_t*)PWM_LIMIT_REVERSE_SET_FLAG_ADDR,PWM_LIMIT_REVERSE_SET_FLAG);
+					eeprom_busy_wait();
 					printf("rev:%d\n",pwm_limit_reverse);
 				}
 			}
@@ -311,8 +335,8 @@ ISR(USART0_RX_vect){ // interrupt service routine for UART0 -> Debug
 			
 		}else{
 			rx_buffer[rx_char_count++] = rx_char;
-			if(rx_command_flag > RX_BUFF){
-				rx_command_flag = 0;
+			if(rx_char_count > RX_BUFF){
+				rx_char_count = 0;
 				printf("\r\nERR: 001\r\n");
 			}
 		}
@@ -396,7 +420,13 @@ ISR(TIMER0_OVF_vect){
 }
 
 ISR(TIMER1_OVF_vect){//interrupt service routine for TIMER 1 -> GSM Parser
-	
+	//if (motor_moving_forward == TRUE){
+		//if(motor_move_count >= pwm_limit_forward/2){
+			//if(current > 5000){
+				//motor_move_count = pwm_limit_forward;
+			//}
+		//}
+	//}
 }
 
 // delay for a minimum of <ms>
@@ -549,6 +579,46 @@ void sendDeviceReady(void){
 	printf("Device Ready...\n");
 }
 
+void InitADC(void){
+	ADMUX |= (1 << REFS0); // Set ADC reference to AVCC
+	// Enable the ADC
+	ADCSRA |= _BV(ADEN);
+}
+
+uint16_t adcRead(uint8_t adcx) {
+	///* adcx is the analog pin we want to use.  ADMUX's first few bits are
+	 //* the binary representations of the numbers of the pins so we can
+	 //* just 'OR' the pin's number with ADMUX to select that pin.
+	 //* We first zero the four bits by setting ADMUX equal to its higher
+	 //* four bits. */
+	//ADMUX	&=	0xf0;
+	//ADMUX	|=	adcx;
+	//
+	///* This starts the conversion. */
+	//ADCSRA |= _BV(ADSC);
+	//
+	///* This is an idle loop that just wait around until the conversion
+	 //* is finished.  It constantly checks ADCSRA's ADSC bit, which we just
+	 //* set above, to see if it is still set.  This bit is automatically
+	 //* reset (zeroed) when the conversion is ready so if we do this in
+	 //* a loop the loop will just go until the conversion is ready. */
+	//while ( (ADCSRA & _BV(ADSC)) );
+	//
+	///* Finally, we return the converted value to the calling function. */
+	
+	// Set ADC channel
+	ADMUX=(ADMUX&0xF0)|adcx;
+
+	// Start A2D Conversions
+	ADCSRA |= (1 << ADSC);
+
+	while(!(ADCSRA & (1<<ADIF)));
+
+	ADCSRA|=(1<<ADIF);
+	
+	return ADC;
+}
+
 void initEncoder(void){
 	ENCODER_CLK_SW_DDR &= ~_BV(MOTOR_ENCODER_CLK);
 	ENCODER_DT_DDR &= ~_BV(MOTOR_ENCODER_DT);
@@ -574,8 +644,9 @@ void InitDevice(void){
 	debug_init(debug_BaudValue,1);
 	stdout = &debug;
 	initLED();
+	InitADC();
 	// init_tmr0();
-	// init_timer1();
+	init_timer1();
 	initRelaySchield();	
 	delay_ms(10);
 	sei();
@@ -583,8 +654,6 @@ void InitDevice(void){
 
 int main(void)
 {
-	pwm_limit_forward = 24;	
-	pwm_limit_reverse = 10;
 	board_hit_flag = FALSE;
 	raspberry_pi_ready = FALSE;
 	motorState = MNONE;
@@ -609,7 +678,21 @@ int main(void)
 	
 	InitDevice();
 	
-	printf("init\n");
+	pwm_limit_forward = 20;
+	if (eeprom_read_byte((const uint8_t*)PWM_LIMIT_FORWARD_SET_FLAG_ADDR) == PWM_LIMIT_FORWARD_SET_FLAG){
+		eeprom_busy_wait();
+		pwm_limit_forward = (uint16_t)eeprom_read_byte((const uint8_t*)PWM_LIMIT_FORWARD_ADDRESS);
+	}
+	eeprom_busy_wait();
+	printf("pwm_limit_forward:%d\n",pwm_limit_forward);
+	
+	pwm_limit_reverse = 6;
+	if (eeprom_read_byte((const uint8_t*)PWM_LIMIT_REVERSE_SET_FLAG_ADDR) == PWM_LIMIT_REVERSE_SET_FLAG){
+		eeprom_busy_wait();
+		pwm_limit_reverse = (uint16_t)eeprom_read_byte((const uint8_t*)PWM_LIMIT_REVERSE_ADDRESS);
+	}
+	eeprom_busy_wait();
+	printf("pwm_limit_reverse:%d\n",pwm_limit_reverse);
 	
 	delay_ms(1000);
 	
@@ -625,14 +708,34 @@ int main(void)
 	delay_ms(1000);
 	
 	sendDeviceReady();
-	topu = 0;
-	
+	topu = 0;;
     while(TRUE)
     {
 		delay_ms(50);
+		adcValue = adcRead(CURRENT_MEASURE_PIN);
+		sensorValue = adcValue;
+		if( sensorValue < 103 ) sensorValue = 102;
+		else if( sensorValue > 921 ) sensorValue = 922;
+		sensorValue -= 102;
+		// calculate current using integer operation
+		current = ( ( sensorValue * 49951 ) >> 10 ) - 20000;
+		if((current>1000 || current < -1000) && adcValue != 1023){
+			printf("Current: %d mV [%d]\n",(int)current,adcValue);
+		}
+		//if(currentPickState == 1){
+			//currentPickState = 0;
+			//current_previous = 0;
+			//printf("Motor Blocked\n");
+		//}
+		//printf("adcValue: %d\n",adcValue);
 		if (motor_moving_forward == TRUE){		
 			// motor will move only for its move time limit
 			motor_move_count++;
+			if(motor_move_count >= pwm_limit_forward/2){
+				if(current >= 4000){
+					motor_move_count = pwm_limit_forward;
+				}
+			}
 			if(motor_move_count == pwm_limit_forward){
 				motor_move_count = 0;
 				motor_forward_moving_state_count = 0;
@@ -672,6 +775,7 @@ int main(void)
 				motor_reverse_moving_state_count = 0;
 				motor_reverse_move_count = 0;
 				boardPosition = LOW;
+				board_low_position_count = 0;
 				motorState = STOP;
 				setMotorStop(0);
 				printf("Motor reverse Move time limit reached!\n");
@@ -701,7 +805,7 @@ int main(void)
 		// waiting till its stay limit to start for high position
 		if (boardPosition==LOW && boardHighAuto == TRUE){
 			board_low_position_count++;
-			if(board_low_position_count == 1){ // 244(=1s)/1000ms = 0.244(=1ms) , 100 ms = 24.4
+			if(board_low_position_count == 122){ // 244(=1s)/1000ms = 0.244(=1ms) , 100 ms = 24.4
 				board_low_position_count = 0;
 				motorState = FORWARD;
 				//motor_position_count = 0;

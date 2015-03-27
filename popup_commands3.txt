@@ -1,0 +1,7 @@
+$0D$0Adown$0D$0A####Board down command
+$0D$0Am:F$0D$0A####Manual Forward
+$0D$0Am:R$0D$0A####Manual Reverse
+$0D$0Am:S$0D$0A####Manual Hard Stop
+$0D$0Am:s$0D$0A####Manual Soft Stop
+$0D$0Aled:0$0D$0A####12v LED off
+$0D$0Aled:1$0D$0A####12v LED on
